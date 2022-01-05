@@ -126,23 +126,27 @@ AnalyseRegMx <- function(condition, dat, fixed_objects = NULL) {
     reg_mx <- mxModel("REG",
         type = "RAM",
         mxData(observed = dat, type = "raw"),
-        manifestVars = c("xsum", "y"),
+        manifestVars = c("xsum", "y", "group"),
         latentVars = "fx",
+        mxAlgebra(1 - 0.25 * a1^2, name = "evfx"),
         # Factor loadings
         mxPath(from = "fx", to = "xsum", free = TRUE,
                values = sd_xsum),
         # Path
+        mxPath(from = "group", to = c("fx", "y"), free = TRUE,
+               values = 0, labels = c("a1", "a2")),
         mxPath(from = "fx", to = "y", free = TRUE,
                values = b1, labels = "b1"),
         # Variance
-        mxPath(from = "fx", arrows = 2, free = FALSE, values = 1),
-        mxPath(from = "y", arrows = 2, free = TRUE,
-               values = 1 - b1^2),
+        mxPath(from = "group", arrows = 2, free = FALSE, values = 0.25),
+        mxPath(from = "fx", arrows = 2, free = FALSE, labels = "evfx[1,1]"),
+        mxPath(from = "y", arrows = 2, free = TRUE, values = 1),
         # Unique variances
         # Mean
+        mxPath(from = "one", to = "group", values = 1.5, free = FALSE),
         mxPath(from = "one", to = "xsum", values = 0, free = TRUE),
         mxPath(from = "one", to = "y", values = 0, free = TRUE,
-               labels = "a1"),
+               labels = "b0"),
         mxCI(c("b1"))
     )
     reg_fit <- mxRun(reg_mx, intervals = TRUE, silent = TRUE)
@@ -374,6 +378,62 @@ GetFscoresMx <- function(dat, lambdax, dlambdax, num_items = 6) {
 # Test: Compute factor scores (Mx)
 # GetFscoresMx(test_dat, lambdax = .53, dlambdax = 0.3)
 
+RunFspa <- function(dat, lambdax, dlambdax, b1, num_items = 6) {
+    fs <- GetFscoresMx(dat,
+        lambdax = lambdax, dlambdax = dlambdax,
+        num_items = num_items
+    )
+    dat <- cbind(dat, fs)
+    if (any(dat$rel <= 0)) {
+        dat$rel <- ifelse(dat$rel <= 0, yes = 0.01, no = dat$rel)
+        warning("Negative reliability estimates")
+    }
+    form_mx <- mxModel("FSPA",
+        type = "RAM",
+        mxData(observed = dat, type = "raw"),
+        manifestVars = c("fx_fs", "y", "group"),
+        latentVars = "fx",
+        mxAlgebra(1 - 0.25 * a1^2, name = "evfx"),
+        # Factor loadings
+        mxPath(from = "fx", to = "fx_fs", free = TRUE,
+               values = sqrt(mean(dat$rel))),
+        # Path
+        mxPath(from = "group", to = c("fx", "y"), free = TRUE,
+               values = 0, labels = c("a1", "a2")),
+        mxPath(from = "fx", to = "y", free = TRUE,
+               values = b1, labels = "b1"),
+        # Variance
+        mxPath(from = "group", arrows = 2, free = FALSE, values = 0.25),
+        mxPath(from = "fx", arrows = 2, free = FALSE, labels = "evfx[1,1]"),
+        mxPath(from = "y", arrows = 2, free = TRUE, values = 1),
+        # Unique variances
+        # Mean
+        mxPath(from = "one", to = "group", values = 1.5, free = FALSE),
+        mxPath(from = "one", to = "fx_fs", values = 0, free = TRUE),
+        mxPath(from = "one", to = "y", values = 0, free = TRUE,
+               labels = "b0"),
+        mxCI(c("b1"))
+    )
+    mxRun(form_mx, intervals = TRUE, silent = TRUE)
+}
+# Test: FS-PA
+# RunFspa(test_dat, lambdax = .53, dlambdax = 0.3, b1 = 0.5)
+
+AnalyseFspa <- function(condition, dat, fixed_objects = NULL) {
+    fspa_fit <- RunFspa(dat,
+        lambdax = fixed_objects$lambdax,
+        dlambdax = fixed_objects$dlambdax,
+        b1 = condition$beta1,
+        num_items = fixed_objects$num_items
+    )
+    if (!fspa_fit@output$status$status == 0) {
+        stop("fspa did not converge")
+    }
+    ExtractMx(fspa_fit)
+}
+# Test: Analyse function
+# AnalyseFspa(DESIGNFACTOR[1, ], dat = test_dat, fixed_objects = FIXED)
+
 Run2spa <- function(dat, lambdax, dlambdax, b1, num_items = 6) {
     fs <- GetFscoresMx(dat,
         lambdax = lambdax, dlambdax = dlambdax,
@@ -387,24 +447,30 @@ Run2spa <- function(dat, lambdax, dlambdax, b1, num_items = 6) {
     form_mx <- mxModel("2SPA",
         type = "RAM",
         mxData(observed = dat, type = "raw"),
-        manifestVars = c("fx_fs", "y"),
+        manifestVars = c("fx_fs", "y", "group"),
         latentVars = "fx",
         mxMatrix("Full",
             nrow = 1, ncol = 1, name = "v_fs",
             values = 1, free = TRUE
         ),
+        mxAlgebra(1 - 0.25 * a1^2, name = "evfx"),
         mxAlgebra(sqrt(v_fs * data.rel), name = "ld"),
         mxAlgebra(v_fs * (1 - data.rel), name = "ev_fs"),
         # Factor loadings
         mxPath(from = "fx", to = "fx_fs", free = FALSE,
                values = sqrt(mean(dat$rel)), labels = "ld[1,1]"),
         # Error variance
-        mxPath(from = "fx", arrows = 2, free = FALSE, values = 1),
+        mxPath(from = "group", arrows = 2, free = FALSE, values = 0.25),
+        mxPath(from = "fx", arrows = 2, free = FALSE,
+               values = 1, labels = "evfx[1,1]"),
         mxPath(from = "fx_fs", arrows = 2, free = FALSE,
                values = 1 - mean(dat$rel), labels = "ev_fs[1,1]"),
+        mxPath(from = "group", to = c("fx", "y"), free = TRUE,
+               values = 0, labels = c("a1", "a2")),
         mxPath(from = "fx", to = "y", values = b1, labels = "b1"),
         mxPath(from = "y", arrows = 2, values = 1 - b1^2),
         # Mean
+        mxPath(from = "one", to = "group", values = 1.5, free = FALSE),
         mxPath(from = "one", to = c("fx_fs", "y"), values = 0, free = TRUE),
         mxPath(from = "one", to = c("fx"), values = 0, free = FALSE),
         mxCI(c("b1"))
@@ -433,12 +499,12 @@ Analyse2spa <- function(condition, dat, fixed_objects = NULL) {
 
 Evaluate <- function(condition, results, fixed_objects = NULL) {
     b1_pop <- condition$beta1
-    est <- results[, c("reg.est", "sem.est", "2spa.est")]
+    est <- results[, c("reg.est", "fspa.est", "sem.est", "2spa.est")]
     c(
         bias = bias(est, b1_pop),
         rmse = RMSE(est, b1_pop),
         rsb = bias(
-            sweep(results[, c("reg.se", "sem.se", "2spa.se")],
+            sweep(results[, c("reg.se", "fspa.se", "sem.se", "2spa.se")],
                 MARGIN = 2, STATS = apply(est, 2, sd), FUN = "/"),
             parameter = 1,
             type = "relative"
@@ -446,6 +512,7 @@ Evaluate <- function(condition, results, fixed_objects = NULL) {
         coverage = ECR(
             results[, c(
                 "reg.ll", "reg.ul",
+                "fspa.ll", "fspa.ul",
                 "sem.ll", "sem.ul",
                 "2spa.ll", "2spa.ul"
             )],
@@ -459,6 +526,7 @@ res <- runSimulation(
     replications = 2500,
     generate = GenData,
     analyse = list(reg = AnalyseRegMx,
+                   fspa = AnalyseFspa,
                    sem = AnalyseSem,
                    `2spa` = Analyse2spa),
     summarise = Evaluate,

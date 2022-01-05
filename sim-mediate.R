@@ -3,6 +3,7 @@ library(SimDesign)
 library(lavaan)
 library(OpenMx)
 library(mirt)
+library(mvnfast)
 
 set.seed(1221)
 
@@ -15,7 +16,7 @@ DESIGNFACTOR <- createDesign(
 )
 
 # Function to generate covariance matrix for minor factors
-get_ucov <- function(p, scale = sqrt(0.1), seed = 201026, n = 26) {
+get_ucov <- function(p, scale = sqrt(0.1), seed = 201026, n = 22) {
     seed_state <- .GlobalEnv$.Random.seed
     set.seed(seed)
     W <- matrix(rnorm(p * n), nrow = n)
@@ -56,7 +57,7 @@ DESIGNFACTOR <- cbind(DESIGNFACTOR,
                       with(DESIGNFACTOR, sqrt(get_psimy(beta1, beta3))))
 
 FIXED <- list(
-    num_items_y = 20,
+    num_items_y = 16,
     num_items_m = 6,
     lambdam = 1,
     dlambdam = -0.5,
@@ -71,15 +72,13 @@ FIXED <- list(
         1.578, 1.154, 0.958, 1.067, 1.290,
         1.446, 0.791, 1.628, 1.334, 0.942,
         1.236,
-        0.816, 0.932, 1.227, 1.179, 1.052,
-        1.144, 0.496, 0.692, 0.715
+        0.816, 0.932, 1.227, 1.179, 1.052
     ) / 1.7,
     diff1 = c(
         -2.118, 0.032, -1.723, -0.466, -1.114,
         -0.700, 0.579, -0.796, 0.474, 0.441,
         -0.820,
-        1.061, 0.910, 0.531, 0.035, 0.435,
-        1.070, -1.303, -1.097, 0.933
+        1.061, 0.910, 0.531, 0.035, 0.435
     ),
     ddiscrimy = list(c(0.5, 0.3, -0.2) / 1.7),
     ddiffy = list(c(-0.3, 0.5, -0.3)),
@@ -163,14 +162,12 @@ GenData <- function(condition, fixed_objects = NULL) {
         rnorm(num_obs[1], sd = psiy)
     etay2 <- alphay2 + b2 * treat[group == 2] + b3 * etam2 +
         rnorm(num_obs[2], sd = psiy)
-    p_y1 <- pnorm(discrim1 * -outer(diff1, etay1, "-") +
-        t(u1[, seq_len(num_items_y) + num_items_m]))
-    y1 <- p_y1
-    y1[] <- rbinom(p_y1, size = 1, prob = p_y1)
-    p_y2 <- pnorm(discrim2 * -outer(diff2, etay2, "-") +
-        t(u2[, seq_len(num_items_y) + num_items_m]))
-    y2 <- p_y2
-    y2[] <- rbinom(p_y2, size = 1, prob = p_y2)
+    y1 <- discrim1 * -outer(diff1, etay1, "-") +
+        t(u1[, seq_len(num_items_y) + num_items_m])
+    y1[] <- as.integer(y1 > 0)
+    y2 <- discrim2 * -outer(diff2, etay2, "-") +
+        t(u2[, seq_len(num_items_y) + num_items_m])
+    y2[] <- as.integer(y2 > 0)
     df <- data.frame(treat,
         rbind(m1, m2),
         t(cbind(y1, y2)),
@@ -259,7 +256,7 @@ GetFscoresM <- function(dat, lambdam, dlambdam, num_items = 6) {
 # Test: Compute factor scores (M)
 # GetFscoresM(test_dat, lambdam = 1, dlambdam = -0.5)
 
-GetFscoresY <- function(dat, num_items = 20,
+GetFscoresY <- function(dat, num_items = 16,
                         pars = NULL) {
     twopl_fit <- RunIrtY(dat,
         num_items = num_items,
@@ -310,11 +307,26 @@ ExtractMx <- function(model,
     setNames(as.vector(out), as.vector(out_names))
 }
 
+GetMonteCarloCi <- function(ab, acov_ab, nsim = 2e4) {
+    med_sample <- rmvn(nsim, ab, acov_ab)
+    unname(quantile(med_sample[, 1] * med_sample[, 2],
+        probs = c(.025, .975)
+    ))
+}
+
 ExtractLavaan <-
     function(object,
              par = c("beta1", "beta2", "beta3", "std_ind")) {
         pe <- parameterEstimates(object)
+        vcov_beta1_beta3 <- lavInspect(object, "vcov.def")[
+            c("beta1", "beta3"),
+            c("beta1", "beta3")
+        ]
         pe <- pe[which(pe$label %in% par), ]
+        std_ind_ci <- GetMonteCarloCi(
+            pe$est[c(1, 3)],
+            vcov_beta1_beta3
+        )
         out_names <- outer_dot(
             par,
             c("est", "se", "ll", "ul")
@@ -324,6 +336,7 @@ ExtractLavaan <-
             ll = pe$ci.lower,
             ul = pe$ci.upper
         )
+        out[4, c("ll", "ul")] <- std_ind_ci
         setNames(as.vector(out), as.vector(out_names))
     }
 
@@ -538,6 +551,9 @@ Analyse2spaMat <- function(condition, dat, fixed_objects = NULL) {
                  free = c(FALSE, FALSE, FALSE, FALSE, TRUE, TRUE),
                  values = c(0, 0, 0.5, 1.5, 0, 0)),
         # SD
+        # mxMatrix(type = "Iden", nrow = 6, name = "I"),
+        # mxAlgebra(solve(I - A)[5:6,3:6], name = "invIminusA"),
+        # mxAlgebra(diag2vec(invIminusA %&% subS), name = "Vv"),
         mxAlgebra(cbind(1, 1, vf ^ 0.5), name = "Sv"),
         mxAlgebra(A[-1:-2,-1:-2], name = "subA"),
         mxAlgebra(vec2diag(Sv ^ -1) %*% subA %*% vec2diag(Sv),
@@ -701,9 +717,9 @@ res <- runSimulation(
     filename = "simulation/mediate-results",
     seed = rep(21390926, nrow(DESIGNFACTOR)),
     parallel = TRUE,
-    ncores = 10L,
+    ncores = 2L,
     save = TRUE,
-    max_errors = 100,
+    max_errors = 200,
     save_results = TRUE,
     save_details = list(
         save_results_dirname = "mediate-results_"
