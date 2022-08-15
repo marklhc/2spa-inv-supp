@@ -9,7 +9,7 @@ set.seed(1221)
 
 # Design factors:
 DESIGNFACTOR <- createDesign(
-    N = c(50, 100, 300),
+    N = c(50, 100, 300, 1000),
     beta1 = c(0, 0.5),  # treat --> fm
     beta2 = 0.3,  # treat --> fy
     beta3 = c(0, 0.4)  # fm --> fy
@@ -237,8 +237,7 @@ GetFscoresM <- function(dat, lambdam, dlambdam, num_items = 6) {
             "m2~1", "m4~1", "m5~1"
         ),
         se = "none",
-        test = "none",
-        bounds = "standard"
+        test = "none"
     )
     fscore_m <- lavPredict(mgcfa_fit, se = TRUE)
     do.call(
@@ -273,6 +272,14 @@ GetFscoresY <- function(dat, num_items = 16,
 # Test: Compute factor scores (mirt)
 # GetFscoresY(test_dat, pars = FIXED$irt_pars)
 
+# Get population marginal reliability
+FIXED$r_yy <- local({
+    large_condition <- cbind(N = 100000, DESIGNFACTOR[1, -1])
+    large_dat <- GenData(large_condition, fixed_objects = FIXED)
+    fs_y <- GetFscoresY(large_dat, pars = FIXED$irt_pars)[ , "fy_fs_rel"]
+    list(min_ryy = min(fs_y), mean_ryy = mean(fs_y))
+})
+
 AddFscores <- function(condition, fixed_objects = NULL) {
     dat <- GenData(condition, fixed_objects = fixed_objects)
     fsm <- GetFscoresM(dat,
@@ -290,6 +297,11 @@ AddFscores <- function(condition, fixed_objects = NULL) {
 # test_dat <- AddFscores(DESIGNFACTOR[1,], fixed_objects = FIXED)
 
 # Analysis function and subfunctions --------------------------------------
+
+AnalyseFscore <- function(condition, dat, fixed_objects = NULL) {
+   c(mse_fy_fs = mean((dat$fy_fs / sd(dat$fy_fs) - dat$etay / sd(dat$etay))^2))
+}
+# AnalyseFscore(DESIGNFACTOR[5,], dat = test_dat)
 
 outer_dot <- function(x, y) {
     outer(x, y, paste, sep = ".")
@@ -318,6 +330,7 @@ ExtractLavaan <-
     function(object,
              par = c("beta1", "beta2", "beta3", "std_ind")) {
         pe <- parameterEstimates(object)
+        if (any(is.infinite(pe$est))) stop("SEM gave infinite estimates.")
         vcov_beta1_beta3 <- lavInspect(object, "vcov.def")[
             c("beta1", "beta3"),
             c("beta1", "beta3")
@@ -390,7 +403,7 @@ AnalyseSem <- function(condition, dat, fixed_objects = NULL) {
         group.equal = c("loadings", "intercepts"),
         group.partial = c(
             "fm=~m2", "fm=~m5",
-            "xm~1", "m4~1", "m5~1",
+            "m2~1", "m4~1", "m5~1",
             "fy=~y1", "fy=~y5", "fy=~y9",
             "y1|t1", "y2|t1", "y5|t1", "y8|t1", "y9|t1"
         ),
@@ -691,6 +704,7 @@ Evaluate <- function(condition, results, fixed_objects = NULL) {
         MARGIN = 2, STATS = rep(pop_vals, each = 2)
     )
     c(
+        rmse_etay = sqrt(mean(results[ , "fs.mse_fy_fs"])),
         bias = bias(est, pop_vals),
         rmse = RMSE(est, pop_vals),
         coverage = ECR(centered_cis,
@@ -707,6 +721,7 @@ res <- runSimulation(
     replications = 2500,
     generate = AddFscores,
     analyse = list(
+        fs = AnalyseFscore,
         sem = AnalyseSem,
         fspa = AnalyseFspaMat,
         `2spa` = Analyse2spaMat
@@ -719,9 +734,9 @@ res <- runSimulation(
     parallel = TRUE,
     ncores = 2L,
     save = TRUE,
-    max_errors = 200,
+    max_errors = 500,
     save_results = TRUE,
     save_details = list(
-        save_results_dirname = "mediate-results_"
+        save_results_dirname = "mediate-results-rev_"
     )
 )
