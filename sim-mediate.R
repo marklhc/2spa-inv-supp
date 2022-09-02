@@ -42,7 +42,9 @@ compute_psi <- function(beta_mat, fixed_psi) {
 get_psimy <- function(beta1, beta3) {
     out <- mapply(function(b1, b3) {
         compute_psi(
-            beta_mat = rbind(0, 0, c(0.2, b1, 0, 0), c(0.3, 0.3, b3, 0)),
+            beta_mat = rbind(0, 0,
+                             c(fixed$dalpham, b1, 0, 0),
+                             c(fixed$dalphay, beta2, b3, 0)),
             fixed_psi = matrix(c(0.25, 0, 0, 0.25), nrow = 2)
         )
     },
@@ -53,8 +55,6 @@ get_psimy <- function(beta1, beta3) {
     colnames(out) <- c("psim", "psiy")
     out
 }
-DESIGNFACTOR <- cbind(DESIGNFACTOR,
-                      with(DESIGNFACTOR, sqrt(get_psimy(beta1, beta3))))
 
 FIXED <- list(
     num_items_y = 16,
@@ -91,6 +91,11 @@ FIXED <- within(FIXED, {
     ucov1 <- get_ucov(num_items)
     ucov2 <- get_ucov(num_items, seed = 201027)
 })
+
+DESIGNFACTOR <- cbind(
+    DESIGNFACTOR,
+    with(DESIGNFACTOR, sqrt(get_psimy(beta1, beta3, fixed = FIXED)))
+)
 
 # Data Generation ---------------------------------------------------------
 
@@ -387,10 +392,11 @@ AnalyseSem <- function(condition, dat, fixed_objects = NULL) {
           # Var
           varfm := (1 + psim2) / 2 + 0.25 * b1^2 + alpham2^2 / 4
           beta1 := b1 / sqrt(varfm)
-          varfy := (1 + psiy2) / 2 + 0.25 * b3^2 +
-                   ((1 + psim2) / 2 + 0.25 * b1^2) * b2^2 +
-                   2 * (1 + psim2) / 2 * b1 * b2 * b3 * 0.25 +
-                   (alphay2 + alpham2 * b2)^2 / 4
+          varfy := (1 + psiy2) / 2 +
+                   b3^2 * ((1 + psim2) / 2 + 0.25 * b1^2) +
+                   b2^2 * 0.25 +
+                   2 * b1 * b2 * b3 * 0.25 +
+                   alphay2^2 / 4
           beta2 := b2 / sqrt(varfy)
           beta3 := b3 * sqrt(varfm / varfy)
           std_ind := beta1 * beta3 "
@@ -734,7 +740,7 @@ res <- runSimulation(
     parallel = TRUE,
     ncores = 2L,
     save = TRUE,
-    max_errors = 500,
+    max_errors = 200,
     save_results = TRUE,
     save_details = list(
         save_results_dirname = "mediate-results-rev_"
